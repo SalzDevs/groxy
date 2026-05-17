@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -167,6 +171,54 @@ func BenchmarkBlockHost(b *testing.B) {
 	}
 }
 
+func BenchmarkHTTPSInspection_CertCacheMiss(b *testing.B) {
+	ca := benchmarkCA(b)
+	cache := newCertCache(ca, 0)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := cache.get(fmt.Sprintf("host-%d.example.com:443", i)); err != nil {
+			b.Fatalf("cache.get() error = %v", err)
+		}
+	}
+}
+
+func BenchmarkHTTPSInspection_CertCacheHit(b *testing.B) {
+	ca := benchmarkCA(b)
+	cache := newCertCache(ca, 0)
+	if _, err := cache.get("example.com:443"); err != nil {
+		b.Fatalf("cache.get() setup error = %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := cache.get("example.com:443"); err != nil {
+			b.Fatalf("cache.get() error = %v", err)
+		}
+	}
+}
+
+func BenchmarkHTTPSInspection_ForwardGET(b *testing.B) {
+	benchmarkHTTPSInspection(b, nil)
+}
+
+func BenchmarkHTTPSInspection_ForwardGETWithHooks(b *testing.B) {
+	benchmarkHTTPSInspection(b, []Middleware{
+		AddRequestHeader("X-Groxy-Benchmark", "true"),
+		AddResponseHeader("X-Groxy-Response", "true"),
+	})
+}
+
+func BenchmarkHTTPSInspection_TransformResponseBody(b *testing.B) {
+	benchmarkHTTPSInspection(b, []Middleware{
+		TransformResponseBody(func(body []byte) ([]byte, error) {
+			return bytes.ToUpper(body), nil
+		}),
+	})
+}
+
 func BenchmarkCONNECT_TunnelSmallPayload(b *testing.B) {
 	benchmarkCONNECTTunnel(b, []byte("ping"))
 }
@@ -262,6 +314,150 @@ func benchmarkCONNECTTunnel(b *testing.B, payload []byte) {
 
 		_ = conn.Close()
 	}
+}
+
+func benchmarkCA(b *testing.B) *CA {
+	b.Helper()
+
+	ca, err := NewCA(CAConfig{CommonName: "Benchmark Groxy CA"})
+	if err != nil {
+		b.Fatalf("NewCA() error = %v", err)
+	}
+
+	return ca
+}
+
+func benchmarkHTTPSInspection(b *testing.B, middleware []Middleware) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("hello"))
+	}))
+	defer upstream.Close()
+
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		b.Fatalf("url.Parse() error = %v", err)
+	}
+
+	ca := benchmarkCA(b)
+	proxyAddr := freeAddrForBenchmark(b)
+	p, err := New(Config{
+		Addr: proxyAddr,
+		HTTPSInspection: &HTTPSInspectionConfig{
+			CA:        ca,
+			Intercept: MatchHosts(upstreamURL.Hostname()),
+		},
+	})
+	if err != nil {
+		b.Fatalf("New() error = %v", err)
+	}
+	p.transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	benchmarkUse(b, p, middleware...)
+
+	startErrCh := make(chan error, 1)
+	go func() {
+		startErrCh <- p.Start()
+	}()
+	waitForTCPBenchmark(b, proxyAddr)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = p.Shutdown(ctx)
+		_ = <-startErrCh
+	}()
+
+	// Prime the per-host certificate cache so the forwarding benchmark focuses
+	// on CONNECT, TLS handshake, inspected HTTP forwarding, and hook overhead.
+	if _, err := p.certCache.get(upstreamURL.Host); err != nil {
+		b.Fatalf("prime cert cache error = %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resp := inspectedHTTPSRequestBenchmark(b, proxyAddr, upstreamURL.Host, upstreamURL.Hostname(), "/", ca)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+}
+
+func inspectedHTTPSRequestBenchmark(b *testing.B, proxyAddr, upstreamHost, serverName, path string, ca *CA) *http.Response {
+	b.Helper()
+
+	clientConn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		b.Fatalf("net.Dial() proxy error = %v", err)
+	}
+	if err := clientConn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		_ = clientConn.Close()
+		b.Fatalf("SetDeadline() error = %v", err)
+	}
+
+	connectReq := "CONNECT " + upstreamHost + " HTTP/1.1\r\nHost: " + upstreamHost + "\r\n\r\n"
+	if _, err := clientConn.Write([]byte(connectReq)); err != nil {
+		_ = clientConn.Close()
+		b.Fatalf("write CONNECT request error = %v", err)
+	}
+
+	reader := bufio.NewReader(clientConn)
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		_ = clientConn.Close()
+		b.Fatalf("read CONNECT status error = %v", err)
+	}
+	if !strings.Contains(statusLine, "200 Connection Established") {
+		_ = clientConn.Close()
+		b.Fatalf("CONNECT status line = %q, want 200 Connection Established", statusLine)
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			_ = clientConn.Close()
+			b.Fatalf("read CONNECT header error = %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.cert)
+	tlsConn := tls.Client(clientConn, &tls.Config{
+		ServerName: serverName,
+		RootCAs:    roots,
+		NextProtos: []string{"http/1.1"},
+	})
+	if err := tlsConn.Handshake(); err != nil {
+		_ = tlsConn.Close()
+		b.Fatalf("TLS handshake error = %v", err)
+	}
+
+	if _, err := tlsConn.Write([]byte("GET " + path + " HTTP/1.1\r\nHost: " + upstreamHost + "\r\nConnection: close\r\n\r\n")); err != nil {
+		_ = tlsConn.Close()
+		b.Fatalf("write HTTPS request error = %v", err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(tlsConn), nil)
+	if err != nil {
+		_ = tlsConn.Close()
+		b.Fatalf("ReadResponse() error = %v", err)
+	}
+	resp.Body = closeWithConn{ReadCloser: resp.Body, conn: tlsConn}
+
+	return resp
+}
+
+type closeWithConn struct {
+	io.ReadCloser
+	conn net.Conn
+}
+
+func (c closeWithConn) Close() error {
+	bodyErr := c.ReadCloser.Close()
+	connErr := c.conn.Close()
+	if bodyErr != nil {
+		return bodyErr
+	}
+	return connErr
 }
 
 func freeAddrForBenchmark(b *testing.B) string {
