@@ -1,44 +1,77 @@
 # Roadmap
 
-Groxy is pre-v1. This roadmap is intentionally flexible and may change based on
-user feedback.
+Groxy is pre-v1. This roadmap tracks what shipped and what's planned next.
 
-## v0.4.0: Observability
+## Done
 
-Goal: make Groxy easier to debug and monitor in real applications.
+### v0.3.0 — HTTPS inspection
 
-Potential work:
+- Explicit opt-in HTTPS inspection with local CA.
+- `HostMatcher`, `MatchHosts`, `MatchAllHosts`.
+- `CAConfig`, `NewCA`, `LoadCAFiles`, `CA.WriteFiles`.
+- Per-host certificate generation and cache.
+- Certificate renewal before expiry.
+- Fail-closed defaults with `PassthroughOnError`.
+- Request/response hooks on intercepted HTTPS.
+- Body transforms on intercepted HTTPS.
+- `BlockHost` on intercepted HTTPS.
 
-- additional request duration tracking
-- bytes in/out tracking
-- structured event hooks
-- benchmark coverage for HTTPS inspection
+### v0.3.1 — Documentation improvements
 
-## v0.5.0: Access control
+- Quickstart and forward proxy building guide.
+- CA trust instructions.
+- Open-source hygiene files.
 
-Goal: make it easier to run Groxy in controlled environments.
+### v0.4.0 — Access logs
 
-Potential work:
+- `AccessLog` middleware for one-line HTTP and CONNECT traffic logs.
+- Access log example.
+- No credential or header leakage in logs.
 
-- proxy authentication helpers
-- allowlist/denylist helpers
-- token-based access control examples
-- better custom error responses
+### v0.4.1 — Timeout documentation
 
-## v0.6.0: HTTPS inspection hardening
+- Timeout semantics guide covering client-to-proxy and proxy-to-upstream behavior.
+- Clarified defaults, zero values, and validation.
+
+### v0.5.0 — Proxy authentication
+
+- `ProxyBasicAuth` for static HTTP Basic proxy authentication.
+- `ProxyBasicAuthFunc` for custom validators.
+- Protects both HTTP proxy requests and HTTPS CONNECT tunnels.
+- `407 Proxy Authentication Required` response handling.
+- Credential stripping before upstream.
+- No reauthentication for inspected HTTPS requests.
+- Proxy auth parsing helpers.
+- Proxy auth guide and runnable example.
+
+### v0.5.1 — Custom block and error response examples
+
+- Custom block/error response guide.
+- Runnable custom block response example.
+- README and docs links updated.
+
+### v0.5.2 — HTTPS inspection benchmarks
+
+- Certificate cache miss and hit benchmarks.
+- Intercepted HTTPS forwarding benchmarks.
+- Benchmarks with hooks and response body transforms.
+
+## Next
+
+### v0.6.0 — HTTPS inspection hardening
 
 Goal: improve safety, configurability, and production ergonomics for HTTPS
 inspection.
 
 Potential work:
 
-- richer host matching controls
+- richer host matching controls (`MatchHostsPrefix`, `MatchHostsSuffix`, `MatchHostsRegex`)
 - custom upstream TLS settings
 - better certificate lifecycle visibility
 - optional certificate persistence hooks
-- more documentation for browser/OS trust setup
+- more documentation for browser and OS trust setup
 
-## v1.0.0: API stabilization
+### v1.0.0 — API stabilization
 
 Goal: stabilize the public API after real-world feedback.
 
@@ -52,9 +85,6 @@ Before v1:
 
 ## Good first issue ideas
 
-These are intentionally scoped for new contributors:
-
-- Add a benchmark for HTTPS inspection.
-- Add more docs for installing the Groxy CA in common browsers/OSes.
-- Add examples for proxy authentication middleware.
-- Improve custom block/error response examples.
+- Add richer host matching controls.
+- Add more docs for installing the Groxy CA in common browsers and OSes.
+- Add a streaming request/response body transform API design discussion.
