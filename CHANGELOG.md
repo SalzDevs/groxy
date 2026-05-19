@@ -12,6 +12,7 @@ Groxy is currently pre-v1, so minor releases may include API changes.
 - `ProxyBasicAuthFunc` middleware for custom HTTP Basic proxy authentication validators on HTTP requests and CONNECT tunnels.
 - Proxy authentication guide and runnable example.
 - Custom block/error response guide and runnable example.
+- `MatchHostsPrefix`, `MatchHostsSuffix`, `MatchHostsRegex` host matchers.
 - HTTPS inspection benchmark coverage for certificate caching, forwarding, hooks, and body transforms.
 - Timeout semantics guide documenting client-to-proxy and proxy-to-upstream behavior.
 

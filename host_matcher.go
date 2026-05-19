@@ -2,6 +2,7 @@ package groxy
 
 import (
 	"net"
+	"regexp"
 	"strings"
 )
 
@@ -49,6 +50,37 @@ func MatchHosts(patterns ...string) HostMatcher {
 		}
 
 		return false
+	}
+}
+
+// MatchHostsPrefix returns a HostMatcher that matches hosts whose normalized
+// form begins with prefix. Matching is case-insensitive.
+func MatchHostsPrefix(prefix string) HostMatcher {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	return func(host string) bool {
+		host = normalizeHost(host)
+		return host != "" && strings.HasPrefix(host, prefix)
+	}
+}
+
+// MatchHostsSuffix returns a HostMatcher that matches hosts whose normalized
+// form ends with suffix. Matching is case-insensitive.
+func MatchHostsSuffix(suffix string) HostMatcher {
+	suffix = strings.ToLower(strings.TrimSpace(suffix))
+	return func(host string) bool {
+		host = normalizeHost(host)
+		return host != "" && strings.HasSuffix(host, suffix)
+	}
+}
+
+// MatchHostsRegex returns a HostMatcher that matches hosts against a regular
+// expression. Matching is case-insensitive. The pattern is compiled with
+// regexp.MustCompile, so an invalid pattern panics at registration time.
+func MatchHostsRegex(pattern string) HostMatcher {
+	re := regexp.MustCompile(pattern)
+	return func(host string) bool {
+		host = normalizeHost(host)
+		return host != "" && re.MatchString(host)
 	}
 }
 
